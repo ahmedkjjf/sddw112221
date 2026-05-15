@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account information and usage limits.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "credits": { "type": "number", "description": "Remaining AI credits" },
+        "isPremium": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "credits", "isPremium"]
+    },
+    "DeobfuscationLog": {
+      "title": "Deobfuscation Log",
+      "description": "History of code analysis and deobfuscation.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "originalSnippet": { "type": "string" },
+        "resultSnippet": { "type": "string" },
+        "modelUsed": { "type": "string" }
+      },
+      "required": ["userId", "timestamp", "originalSnippet", "resultSnippet"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user profiles"
+    },
+    "/logs/{logId}": {
+      "schema": "DeobfuscationLog",
+      "description": "Historical logs of deobfuscation attempts"
+    }
+  }
+}
