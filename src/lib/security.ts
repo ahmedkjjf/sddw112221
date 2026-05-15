@@ -143,12 +143,12 @@ export function startAntiDebug() {
 
 // Detect if console is open via threshold
 export function detectDevTools(onDetect: () => void) {
-  const threshold = 200; // Increased threshold
+  const threshold = 300; // Increased threshold to avoid false positives with sidebars
   let devtoolsOpen = false;
 
   const check = () => {
-    const widthDiff = window.outerWidth - window.innerWidth;
-    const heightDiff = window.outerHeight - window.innerHeight;
+    const widthDiff = Math.abs(window.outerWidth - window.innerWidth);
+    const heightDiff = Math.abs(window.outerHeight - window.innerHeight);
     
     if ((widthDiff > threshold || heightDiff > threshold) && !devtoolsOpen) {
       devtoolsOpen = true;
@@ -182,28 +182,30 @@ export function monitorPerformance(onAnomaly: () => void) {
   
   setInterval(() => {
     const currentTime = performance.now();
-    if (currentTime - lastTime > 1500) { // 1.5s threshold
+    // Use a much higher threshold (3s) to avoid triggers on normal system lag or heavy AI streaming
+    if (currentTime - lastTime > 3000) { 
       onAnomaly();
     }
     lastTime = currentTime;
-  }, 500); // Check every 0.5s
+  }, 1000); // Check every 1s
 }
 
 // Authorized Origin Validation
-const AUTH_ZONES = [
-  'ais-dev-6wp7ozzu7rxgl2k4y7cgsr-370633190819.europe-west1.run.app',
-  'ais-pre-6wp7ozzu7rxgl2k4y7cgsr-370633190819.europe-west1.run.app',
-  'localhost',
-  '127.0.0.1'
-];
-
 export function validateEnvironment(): boolean {
   const currentHost = window.location.hostname;
   
-  if (!AUTH_ZONES.includes(currentHost)) {
-    console.error('CRITICAL: UNAUTHORIZED_DEPLOYMENT_DETECTED');
-    logSecurityEvent('UNAUTHORIZED_DEPLOYMENT', `Host: ${currentHost}`);
-    return false;
-  }
-  return true;
+  // Allow localhost and local IP
+  if (currentHost === 'localhost' || currentHost === '127.0.0.1' || !currentHost) return true;
+
+  // Allow Netlify
+  if (currentHost.includes('netlify.app')) return true;
+
+  // Allow anything that contains the project identifier hash (6wp7ozzu7rxgl2k4y7cgsr)
+  // This ensures legitimate AI Studio previews work without flickering
+  if (currentHost.includes('6wp7ozzu7rxgl2k4y7cgsr')) return true;
+
+  // Otherwise, block unauthorized clones
+  console.error('CRITICAL: UNAUTHORIZED_DEPLOYMENT_DETECTED');
+  logSecurityEvent('UNAUTHORIZED_DEPLOYMENT', `Host: ${currentHost}`);
+  return false;
 }
