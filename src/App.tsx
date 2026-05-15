@@ -76,10 +76,10 @@ export default function App() {
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
   const [visitorIntel, setVisitorIntel] = useState<any>(null);
   const [isIntelOpen, setIsIntelOpen] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState(true);
+  const [isAuthorized, setIsAuthorized] = useState(() => validateEnvironment());
 
   useEffect(() => {
-    // Domain Check
+    // Re-check just in case, though initialized by function
     const authorized = validateEnvironment();
     setIsAuthorized(authorized);
     if (!authorized) return;
@@ -140,7 +140,7 @@ export default function App() {
     monitorPerformance(() => {
       addLog('SEC_WARN: EXECUTION_DELAY_DETECTED', 'warn');
       logSecurityEvent('PERFORMANCE_ANOMALY', 'Execution lag detected. Possible debugging/probing attempt.');
-      setStatus('ACCESS_LOCKED');
+      // Do not lock UI for lag anymore, just log and warn
     });
 
     // Prevent Drag and Drop
