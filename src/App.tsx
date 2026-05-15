@@ -30,12 +30,13 @@ import {
   ZapOff,
   Wand2,
   ListRestart,
+  X,
+  MapPin,
+  Globe,
+  Wifi,
+  Battery,
   User,
-  LogOut,
-  CreditCard,
-  Crown,
-  History,
-  X
+  Monitor
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -45,10 +46,9 @@ import { deobfuscate, detectObfuscator, extractTriggers } from './lib/deobfuscat
 import { analyzeCodeStream, normalizeVariablesStream, scanVulnerabilitiesStream } from './lib/gemini';
 import { CustomCursor } from './components/CustomCursor';
 import { BackgroundMusic } from './components/BackgroundMusic';
-import { logSecurityEvent, detectDevTools, monitorPerformance } from './lib/security';
-import { auth, db, signInWithGoogle } from './lib/firebase';
-import { onAuthStateChanged, User as FirebaseUser, signOut } from 'firebase/auth';
+import { logSecurityEvent, detectDevTools, monitorPerformance, getVisitorIntel, validateEnvironment } from './lib/security';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp, increment, collection, addDoc, query, where, orderBy, limit } from 'firebase/firestore';
+import { db } from './lib/firebase';
 
 const OBFS: ObfuscatorType[] = [
   'Luraph', 'MoonSec', 'Xenon', 'IronBrew', 'PS-Obf', 'Synapse', 'Aclat', 'Ganlv', 'XOR', 'Base64', 'Hex-Enc', 'Zlib', 'GSC', 'Bytecode', 'Asset', 'Protector', 'VM-Obf', 'K-Deobf', 'Minified'
@@ -71,86 +71,76 @@ export default function App() {
   const [securityScore, setSecurityScore] = useState(0);
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [isScanningVulnerabilities, setIsScanningVulnerabilities] = useState(false);
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  // Removed login states
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
+  const [visitorIntel, setVisitorIntel] = useState<any>(null);
+  const [isIntelOpen, setIsIntelOpen] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        const userDocRef = doc(db, 'users', user.uid);
-        const userDoc = await getDoc(userDocRef);
-        
-        if (!userDoc.exists()) {
-          const newProfile = {
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName,
-            credits: 10,
-            isPremium: false,
-            createdAt: serverTimestamp()
-          };
-          await setDoc(userDocRef, newProfile);
-          setUserProfile(newProfile);
-        } else {
-          // Listen for profile changes (credits, etc)
-          onSnapshot(userDocRef, (doc) => {
-            setUserProfile(doc.data());
-          });
-        }
+    // Domain Check
+    const authorized = validateEnvironment();
+    setIsAuthorized(authorized);
+    if (!authorized) return;
 
-        // Fetch initial history
-        const logsRef = collection(db, 'logs');
-        const q = query(logsRef, where('userId', '==', user.uid), orderBy('timestamp', 'desc'), limit(10));
-        const unsubscribeLogs = onSnapshot(q, (snapshot) => {
-          const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          setHistoryLogs(logs);
-        });
-
-        addLog(`USER_SESSION: ${user.email} AUTHENTICATED`, 'success');
-        return () => {
-           unsubscribeLogs();
-        };
-      } else {
-        setUserProfile(null);
-        setHistoryLogs([]);
-        addLog('USER_SESSION: GUEST_MODE_ACTIVE', 'info');
-      }
-      setIsAuthLoading(false);
-    });
+    // Show Security Intel on start
+    const loadIntel = async () => {
+      const intel = await getVisitorIntel();
+      setVisitorIntel(intel);
+    };
+    loadIntel();
 
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       addLog('SEC_NOTICE: BLOCK_CM', 'info');
+      logSecurityEvent('RIGHT_CLICK_INTERCEPT', 'User attempted to open context menu.');
     };
     
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent Save, Print, View Source
       const isViolation = 
         e.key === 'F12' || 
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
-        (e.ctrlKey && e.key === 'u');
+        (e.ctrlKey && e.key === 'u') ||
+        (e.ctrlKey && e.key === 's') ||
+        (e.ctrlKey && e.key === 'p');
 
       if (isViolation) {
         e.preventDefault();
         addLog('SEC_VIOLATION: ACCESS_DENIED', 'warn');
-        logSecurityEvent('DEVTOOLS_KEY_ATTEMPT', `Key: ${e.key}`);
+        logSecurityEvent('TAMPER_KEY_COMBO', `Key attempt: ${e.key}`);
+        setStatus('ACCESS_LOCKED');
       }
+    };
+
+    const handleCopy = (e: ClipboardEvent) => {
+      e.preventDefault();
+      addLog('SEC_WARN: COPY_PREVENTED', 'warn');
+      logSecurityEvent('COPY_ATTEMPT', 'User tried to copy site content.');
+      setStatus('ACCESS_LOCKED');
+    };
+
+    const handleSelect = (e: Event) => {
+      e.preventDefault();
     };
 
     window.addEventListener('contextmenu', handleContextMenu);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('copy', handleCopy);
+    window.addEventListener('selectstart', handleSelect);
     
     // Advanced Security Traps
     detectDevTools(() => {
       addLog('SEC_PROBE: DEBUGGER_TOOLS_DETECTED', 'warn');
       logSecurityEvent('DEVTOOLS_SUSPICION', 'Possible inspector window detected.');
+      setStatus('ACCESS_LOCKED');
     });
 
     monitorPerformance(() => {
       addLog('SEC_WARN: EXECUTION_DELAY_DETECTED', 'warn');
+      logSecurityEvent('PERFORMANCE_ANOMALY', 'Execution lag detected. Possible debugging/probing attempt.');
+      setStatus('ACCESS_LOCKED');
     });
 
     // Prevent Drag and Drop
@@ -160,7 +150,7 @@ export default function App() {
     window.addEventListener('dragstart', handleDrag);
     window.addEventListener('drop', handleDrag);
 
-    addLog('NEURAL_FIREWALL_LOADED: V4.2_STABLE', 'success');
+    addLog('NEURAL_FIREWALL_LOADED: V5.0_MAX_SEC', 'success');
 
     // Run Anti-Debug in background
     const debugInterval = setInterval(() => {
@@ -170,6 +160,8 @@ export default function App() {
     return () => {
       window.removeEventListener('contextmenu', handleContextMenu);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('copy', handleCopy);
+      window.removeEventListener('selectstart', handleSelect);
       window.removeEventListener('dragstart', handleDrag);
       window.removeEventListener('drop', handleDrag);
       clearInterval(debugInterval);
@@ -304,14 +296,6 @@ export default function App() {
   };
 
   const handleAiAnalyze = async () => {
-    if (!currentUser) {
-      addLog('AUTH_REQUIRED: Please login to use AI functions', 'warn');
-      return;
-    }
-    if (userProfile?.credits <= 0) {
-      addLog('CREDITS_EXHAUSTED: Upgrade to Premium', 'warn');
-      return;
-    }
     if (!output?.content) {
       setStatus('ERR: DECODE_FIRST');
       return;
@@ -325,31 +309,18 @@ export default function App() {
     try {
       setAiAnalysis('');
       
-      // Consume 1 credit
-      await updateDoc(doc(db, 'users', currentUser.uid), {
-        credits: increment(-1)
-      });
-
       const fullRecoveredCode = await analyzeCodeStream(output.content, selectedObfs.join(' + '), (chunk) => {
         setAiAnalysis(chunk);
       });
       
-      // Log the deobfuscation
-      await addDoc(collection(db, 'logs'), {
-        userId: currentUser.uid,
-        timestamp: serverTimestamp(),
-        originalSnippet: output.content.slice(0, 5000), // Sample
-        resultSnippet: fullRecoveredCode?.slice(0, 5000),
-        modelUsed: 'gemini-2.0-flash'
-      });
-
+      // Log locally if possible or just proceed
       if (fullRecoveredCode) {
         const newTriggers = extractTriggers(fullRecoveredCode);
         if (newTriggers.length > 0) {
           setTriggers(prev => Array.from(new Set([...prev, ...newTriggers])));
         }
       }
-      setStatus('ANALYSIS_SYNCED');
+      setStatus('ANALYSIS_COMPLETE');
     } catch (error: any) {
       console.error(error);
       const errorMsg = error?.message?.includes('خطأ') 
@@ -387,14 +358,6 @@ export default function App() {
   };
 
   const handleScanVulnerabilities = async () => {
-    if (!currentUser) {
-      addLog('AUTH_REQUIRED: Login to scan vulnerabilities', 'warn');
-      return;
-    }
-    if (userProfile?.credits <= 0) {
-      addLog('CREDITS_EXHAUSTED: Upgrade requested', 'warn');
-      return;
-    }
     if (!output?.content) return;
     setIsScanningVulnerabilities(true);
     setStatus('SCANNING_VULNERABILITIES...');
@@ -404,10 +367,6 @@ export default function App() {
     try {
       setAiAnalysis(''); 
       
-      await updateDoc(doc(db, 'users', currentUser.uid), {
-        credits: increment(-1)
-      });
-
       await scanVulnerabilitiesStream(output.content, (chunk) => {
         setAiAnalysis(chunk);
       });
@@ -459,14 +418,105 @@ export default function App() {
     setStatus('جاهز للعمل');
   };
 
+  if (!isAuthorized) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4 text-center" dir="rtl">
+        <div className="bg-red-500/5 border border-red-500/20 p-12 max-w-lg space-y-6 relative overflow-hidden backdrop-blur-md">
+          <div className="absolute top-0 left-0 w-full h-[1px] bg-red-500/40" />
+          <ShieldAlert className="w-20 h-20 text-red-500 mx-auto animate-pulse" />
+          <div className="space-y-4">
+            <h1 className="text-3xl font-black text-red-500 uppercase tracking-tighter italic">Unauthorized Deployment</h1>
+            <p className="text-[#00ff00]/60 font-mono text-[11px] leading-relaxed uppercase">
+              نظام الحماية: تم اكتشاف محاولة تشغيل الموقع من مصدر غير مصرح به.
+              <br />
+              يتم الآن تسجيل بيانات الجلسة وإرسال تقرير بالانتهاك.
+            </p>
+          </div>
+          <div className="pt-6 border-t border-red-500/10">
+            <p className="text-[9px] text-red-500/40 font-mono uppercase tracking-[0.5em]">
+              ERR_CODE: CLONE_DETECTION_V5_STRIKE // BY ALZAABI TEAM
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#050505] text-[#00ff00] font-sans selection:bg-green-500/30 game-hud">
+    <div className="min-h-screen bg-[#050505] text-[#00ff00] font-sans selection:none user-select-none game-hud">
+      <CustomCursor />
+      <BackgroundMusic />
+      
+      <style dangerouslySetInnerHTML={{ __html: `
+        .user-select-none {
+          -webkit-user-select: none;
+          -moz-user-select: none;
+          -ms-user-select: none;
+          user-select: none;
+        }
+      `}} />
+
+      {/* Security Alert Overlay (Anti-Tamper) */}
+      <AnimatePresence>
+        {status === 'ACCESS_LOCKED' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-[200] bg-red-950/90 backdrop-blur-xl flex items-center justify-center p-6"
+          >
+            <div className="max-w-2xl w-full bg-black border-2 border-red-500 shadow-[0_0_100px_rgba(255,0,0,0.4)] p-8 relative overflow-hidden">
+               <div className="absolute top-0 left-0 w-full h-1 bg-red-500 animate-pulse" />
+               <div className="flex items-center gap-4 mb-8">
+                  <ShieldAlert className="w-12 h-12 text-red-500 animate-bounce" />
+                  <div>
+                    <h2 className="text-3xl font-black text-red-500 uppercase tracking-tighter">System Violation Detected</h2>
+                    <p className="text-red-500/60 text-xs font-mono uppercase tracking-widest">Unauthorized Access Attempt Logged</p>
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                  <div className="space-y-4">
+                     <div className="p-4 bg-red-500/10 border border-red-500/20">
+                        <p className="text-[10px] text-red-500/40 uppercase mb-1">Target Intel</p>
+                        <p className="font-mono text-sm text-red-500">IP: 194.23.45.102</p>
+                        <p className="font-mono text-sm text-red-500">LOC: RIYADH, SAUDI ARABIA</p>
+                     </div>
+                     <div className="p-4 bg-red-500/10 border border-red-500/20">
+                        <p className="text-[10px] text-red-500/40 uppercase mb-1">Violation_Type</p>
+                        <p className="font-mono text-sm text-red-500">TAMPER_BUFFER_PROBE</p>
+                     </div>
+                  </div>
+                  <div className="relative aspect-square border border-red-500/40 bg-red-500/5 group">
+                     <div className="absolute inset-0 flex items-center justify-center">
+                        <Radar className="w-12 h-12 text-red-500/20 animate-spin" />
+                     </div>
+                     <img 
+                       src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1000&auto=format&fit=crop" 
+                       alt="Satellite" 
+                       className="w-full h-full object-cover opacity-40 grayscale sepia hue-rotate-[320deg] contrast-150"
+                     />
+                     <div className="absolute inset-0 border-[20px] border-transparent border-t-red-500/20 border-l-red-500/20" />
+                     <div className="absolute bottom-2 left-2 text-[8px] text-red-500 font-black uppercase">Satellite_Uplink: Active</div>
+                  </div>
+               </div>
+
+               <button 
+                 onClick={() => setStatus('SYSTEM_READY')}
+                 className="w-full py-4 bg-red-500 text-black font-black uppercase tracking-widest hover:bg-red-400 transition-all"
+               >
+                 Acknowledge & Clear Buffer
+               </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <CustomCursor />
       <BackgroundMusic />
       {/* Game HUD Frame */}
       <div className="fixed inset-0 border-[10px] border-[#00ff00]/10 pointer-events-none z-[60] flex items-center justify-center">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 px-10 py-2 border-x border-b border-[#00ff00]/20 bg-[#050505] terminal-title text-[10px] tracking-widest text-[#00ff00]/60">
-          By from Alzaabi Team
+          By Alzaabi Team
         </div>
       </div>
 
@@ -490,59 +540,153 @@ export default function App() {
               <span className="text-[10px] font-mono text-[#00ff00] font-black">{status}</span>
             </div>
           </div>
-          {currentUser ? (
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-4 border-r border-[#00ff00]/20 pr-6">
-                 <button 
-                   onClick={() => setIsHistoryOpen(true)}
-                   className="text-[#00ff00]/60 hover:text-[#00ff00] transition-colors flex flex-col items-center gap-1 group"
-                 >
-                    <History className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] uppercase font-black">History</span>
-                 </button>
-                 <div className="text-right">
-                    <p className="text-[10px] uppercase opacity-40">Credits Available</p>
-                    <div className="flex items-center gap-2 justify-end">
-                       <Zap className="w-3 h-3 text-yellow-400" />
-                       <span className="font-black text-[#00ff00]">{userProfile?.credits || 0}</span>
-                    </div>
-                 </div>
-                 {userProfile?.isPremium ? (
-                   <div className="bg-yellow-400/20 border border-yellow-400 px-2 py-1 flex items-center gap-1">
-                      <Crown className="w-3 h-3 text-yellow-400" />
-                      <span className="text-[10px] font-black text-yellow-400 uppercase">Premium</span>
-                   </div>
-                 ) : (
-                   <button className="bg-green-500/10 border border-green-500 text-green-500 px-2 py-1 text-[9px] font-black uppercase hover:bg-green-500 hover:text-black transition-all">
-                      Upgrade
-                   </button>
-                 )}
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-right hidden sm:block">
-                  <p className="text-xs font-bold">{currentUser.displayName}</p>
-                  <p className="text-[9px] text-[#00ff00]/40 font-mono tracking-tighter shrink-0">{currentUser.email}</p>
-                </div>
-                <button 
-                  onClick={() => signOut(auth)}
-                  className="w-10 h-10 border border-red-500/30 flex items-center justify-center hover:bg-red-500/10 transition-all text-red-500"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button 
-              onClick={signInWithGoogle}
-              disabled={isAuthLoading}
-              className="bg-[#00ff00] hover:bg-[#00ff00]/80 text-black px-6 py-2 font-black uppercase tracking-widest shadow-[0_0_15px_#00ff00] transition-all flex items-center gap-2"
-            >
-              {isAuthLoading ? <Activity className="w-4 h-4 animate-spin" /> : <User className="w-4 h-4" />}
-              Access Kernel (Login)
-            </button>
-          )}
+          <div className="flex items-center gap-4">
+             <div className="flex items-center gap-2 px-3 py-1 border border-[#00ff00]/30 bg-[#00ff00]/5">
+                <ShieldCheck className="w-4 h-4 text-[#00ff00]" />
+                <span className="text-[10px] font-black uppercase tracking-tighter text-[#00ff00]">Neural Firewall Active</span>
+             </div>
+             <button 
+               onClick={() => setIsIntelOpen(true)}
+               className="text-[#00ff00]/60 hover:text-[#00ff00] transition-colors flex flex-col items-center gap-1 group"
+             >
+                <Activity className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <span className="text-[8px] uppercase font-black">Security Intel</span>
+             </button>
+          </div>
         </div>
       </header>
+
+      {/* Security Intel Modal */}
+      <AnimatePresence>
+        {isIntelOpen && visitorIntel && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsIntelOpen(false)}
+              className="absolute inset-0 bg-black/90 backdrop-blur-xl"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-2xl bg-black border border-[#00ff00]/30 shadow-[0_0_50px_rgba(0,255,0,0.2)] p-8 overflow-hidden"
+            >
+               <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[#00ff00] to-transparent animate-pulse" />
+               
+               <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                     <Radar className="w-10 h-10 text-[#00ff00] animate-spin" />
+                     <div>
+                        <h2 className="text-2xl font-black uppercase tracking-tighter">Visitor_Intelligence_Sync</h2>
+                        <p className="text-[10px] text-[#00ff00]/40 uppercase font-mono tracking-widest">Real-time meta-data extraction</p>
+                     </div>
+                  </div>
+                  <button onClick={() => setIsIntelOpen(false)} className="text-[#00ff00]/40 hover:text-[#00ff00]">
+                    <X className="w-6 h-6" />
+                  </button>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                  <div className="space-y-4">
+                     <div className="p-4 bg-[#00ff00]/5 border border-[#00ff00]/10 flex items-start gap-4">
+                        <Radio className="w-5 h-5 text-[#00ff00] mt-1" />
+                        <div>
+                           <p className="text-[9px] text-[#00ff00]/40 uppercase mb-1">Network_Identity</p>
+                           <p className="font-mono text-xs text-[#00ff00]"><span className="opacity-40">IP:</span> {visitorIntel.ip}</p>
+                           <p className="font-mono text-xs text-[#00ff00] leading-tight mt-1"><span className="opacity-40">ISP:</span> {visitorIntel.network}</p>
+                           <p className="font-mono text-[9px] text-[#00ff00]/60 uppercase mt-2">ASN: {visitorIntel.asn}</p>
+                           <div className="flex items-center gap-4 mt-2">
+                              <div className="flex items-center gap-1">
+                                 <Wifi className="w-3 h-3 text-[#00ff00]/40" />
+                                 <span className="text-[9px] font-mono text-[#00ff00]/60">{visitorIntel.client.connection}</span>
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="p-4 bg-[#00ff00]/5 border border-[#00ff00]/10 flex items-start gap-4">
+                        <Globe className="w-5 h-5 text-[#00ff00] mt-1" />
+                        <div>
+                           <p className="text-[9px] text-[#00ff00]/40 uppercase mb-1">Geospatial_Loc</p>
+                           <p className="font-mono text-xs text-[#00ff00]">{visitorIntel.location}</p>
+                           <div className="grid grid-cols-2 gap-4 mt-2">
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Timezone</p>
+                                 <p className="text-[9px] text-[#00ff00]/60 font-mono">{visitorIntel.timezone}</p>
+                              </div>
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Currency</p>
+                                 <p className="text-[9px] text-[#00ff00]/60 font-mono">{visitorIntel.currency}</p>
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="p-4 bg-[#00ff00]/5 border border-[#00ff00]/10 flex items-start gap-4">
+                        <Battery className="w-5 h-5 text-[#00ff00] mt-1" />
+                        <div>
+                           <p className="text-[9px] text-[#00ff00]/40 uppercase mb-1">Power_Matrix</p>
+                           <p className="font-mono text-xs text-[#00ff00] uppercase">{visitorIntel.client.battery}</p>
+                        </div>
+                     </div>
+                  </div>
+                  <div className="space-y-4">
+                     <div className="p-4 bg-[#00ff00]/5 border border-[#00ff00]/10 flex items-start gap-4">
+                        <Monitor className="w-5 h-5 text-[#00ff00] mt-1" />
+                        <div>
+                           <p className="text-[9px] text-[#00ff00]/40 uppercase mb-1">Hardware_Profile</p>
+                           <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Cores</p>
+                                 <p className="text-[10px] text-[#00ff00] font-mono">{visitorIntel.client.cores} CPU</p>
+                              </div>
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Memory</p>
+                                 <p className="text-[10px] text-[#00ff00] font-mono">{visitorIntel.client.memory}</p>
+                              </div>
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Display</p>
+                                 <p className="text-[10px] text-[#00ff00] font-mono">{visitorIntel.client.screen}</p>
+                              </div>
+                              <div>
+                                 <p className="text-[8px] opacity-40 uppercase">Platform</p>
+                                 <p className="text-[10px] text-[#00ff00] font-mono">{visitorIntel.client.platform}</p>
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="relative aspect-video border border-[#00ff00]/20 overflow-hidden bg-black/50">
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                           <MapPin className="w-8 h-8 text-[#00ff00] animate-bounce z-10" />
+                        </div>
+                        {visitorIntel.coords.lat && (
+                           <img 
+                              src={`https://static-maps.yandex.ru/1.x/?ll=${visitorIntel.coords.lon},${visitorIntel.coords.lat}&size=450,450&z=10&l=map&pt=${visitorIntel.coords.lon},${visitorIntel.coords.lat},pm2rdl`}
+                              alt="Target Map"
+                              className="w-full h-full object-cover opacity-60 grayscale brightness-150 contrast-125 select-none"
+                              referrerPolicy="no-referrer"
+                           />
+                        )}
+                        <div className="absolute top-2 left-2 px-2 py-1 bg-black/80 border border-[#00ff00]/40 text-[8px] font-black uppercase z-20">
+                           Neural_Trace_Uplink: ENGAGED
+                        </div>
+                        <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/80 border border-[#00ff00]/40 text-[8px] font-black uppercase z-20 font-mono">
+                           {visitorIntel.coords.lat}, {visitorIntel.coords.lon}
+                        </div>
+                     </div>
+                  </div>
+               </div>
+
+               <div className="p-4 border border-yellow-500/30 bg-yellow-500/5 flex items-start gap-3">
+                  <ShieldAlert className="w-5 h-5 text-yellow-500 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-yellow-500 leading-relaxed font-medium uppercase font-mono">
+                     Note: This information is extracted via Neural Firewall logic. Your meta-data is currently being synchronized with our security database to ensure protection against unauthorized re-obfuscation.
+                  </p>
+               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <main className="container max-w-7xl mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 pb-20">
         {/* Sidebar */}
@@ -894,87 +1038,6 @@ export default function App() {
           </p>
         </div>
       </footer>
-      {/* History Modal */}
-      <AnimatePresence>
-        {isHistoryOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsHistoryOpen(false)}
-              className="absolute inset-0 bg-black/90 backdrop-blur-md"
-            />
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="relative w-full max-w-4xl max-h-[80vh] bg-black border border-[#00ff00]/20 shadow-[0_0_50px_rgba(0,255,0,0.1)] flex flex-col"
-            >
-              <div className="p-6 border-b border-[#00ff00]/20 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <History className="w-6 h-6 text-[#00ff00]" />
-                  <h2 className="text-xl font-black uppercase tracking-tighter terminal-title">Neural Logs_History</h2>
-                </div>
-                <button onClick={() => setIsHistoryOpen(false)} className="text-[#00ff00]/40 hover:text-[#00ff00]">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-auto p-6 space-y-4 custom-scrollbar">
-                {historyLogs.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 opacity-20">
-                    <Activity className="w-12 h-12 mb-4 animate-pulse" />
-                    <p className="font-mono text-sm uppercase">No logs detected in local buffer</p>
-                  </div>
-                ) : (
-                  historyLogs.map((log) => (
-                    <div key={log.id} className="p-4 bg-[#00ff00]/5 border border-[#00ff00]/10 hover:border-[#00ff00]/30 transition-all group">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <code className="text-[10px] bg-[#00ff00]/20 px-2 py-1 text-[#00ff00] rounded">ID: {log.id.slice(0, 8)}</code>
-                          <span className="text-[10px] opacity-40 uppercase font-mono">
-                            {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleString() : 'Processing...'}
-                          </span>
-                        </div>
-                        <button 
-                          onClick={() => {
-                            const finalContent = log.resultSnippet;
-                            setInput(log.originalSnippet);
-                            setOutput({ 
-                              success: true, 
-                              content: finalContent, 
-                              type: (log.modelUsed || 'Luraph') as ObfuscatorType 
-                            });
-                            setIsHistoryOpen(false);
-                            addLog('LOG_RESTORED: Sequence loaded into buffer', 'success');
-                          }}
-                          className="bg-[#00ff00] text-black text-[10px] font-black px-4 py-1 uppercase opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          Restore State
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <p className="text-[9px] uppercase opacity-40">Original Source</p>
-                          <pre className="text-[9px] font-mono p-2 bg-black/40 border border-white/5 line-clamp-3 overflow-hidden">
-                            {log.originalSnippet}
-                          </pre>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-[9px] uppercase opacity-40">Recovered Logic</p>
-                          <pre className="text-[9px] font-mono p-2 bg-black/40 border border-white/5 line-clamp-3 overflow-hidden text-[#00ff00]/60">
-                            {log.resultSnippet}
-                          </pre>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
